@@ -1,19 +1,24 @@
-//! siphon: stream an S3 bucket into a Proxmox Backup Server snapshot.
+//! siphon: stream an S3 bucket into a Proxmox Backup Server snapshot, and back.
 //!
-//! Stub: wiring only. See docs/DESIGN.md for the data flow.
+//! See docs/DESIGN.md for the data flow.
 
-use anyhow::{Context, Result};
-use pbs_client::BackupRepository;
+mod backup;
+mod cli;
+mod restore;
+mod s3;
+mod tree;
+
+use anyhow::Result;
+use clap::Parser;
+
+use cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let repo: BackupRepository = std::env::var("PBS_REPOSITORY")
-        .context("PBS_REPOSITORY is not set")?
-        .parse()
-        .context("invalid PBS_REPOSITORY")?;
-    log::info!("target repository: {repo}");
-
-    anyhow::bail!("not implemented yet");
+    match Cli::parse().command {
+        Command::Backup(args) => backup::run(args).await,
+        Command::Restore(args) => restore::run(args).await,
+    }
 }
