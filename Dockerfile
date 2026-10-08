@@ -15,6 +15,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked \
  && install -Dm755 target/release/siphon /out/siphon
 
+# `docker buildx build --target artifact --output dist` exports just the binary
+FROM scratch AS artifact
+COPY --from=build /out/siphon /siphon
+
 FROM docker.io/library/debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
