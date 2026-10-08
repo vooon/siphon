@@ -17,12 +17,16 @@ This is a **PUBLIC** repository; it is deployed into a **private** homelab. Neve
 - Never commit any key, token, fingerprint of a real server, or certificate material.
 
 ## Architecture
-- One binary, `siphon`, one run = one PBS snapshot. Configured from the
-  environment (see docs/DESIGN.md → Configuration), meant to run as a CronJob.
+- One binary, `siphon`, subcommands `backup` (one run = one PBS snapshot) and
+  `restore` (snapshot -> bucket). Every option is a clap flag with an `env`
+  mapping (see docs/DESIGN.md → Configuration); meant to run as a CronJob.
+- Modules: `cli.rs` (clap), `s3.rs` (client, listing, metadata <-> xattrs),
+  `tree.rs` (key <-> archive path, escaping), `backup.rs`, `restore.rs`.
 - Data flow: S3 `ListObjectsV2` → per object `GetObject` body stream →
   `pxar` encoder → `pbs_client` chunker/`BackupWriter` → manifest → finish.
   Constant memory: one object body in flight; no local staging.
-- S3 access: `proxmox-s3-client` (path-style, works with Ceph RGW).
+- S3 access: `aws-sdk-s3` (path-style or virtual-hosted). Object metadata is
+  kept as `user.s3.*` xattrs; escaped keys carry `user.s3.key`.
 - PBS access: `pbs-client` / `pbs-datastore` from the `proxmox-backup` git repo,
   pinned to a revision matching the target server release.
 - `proxmox-backup-client`'s `backup` command is the reference for the call
@@ -48,14 +52,20 @@ This is a **PUBLIC** repository; it is deployed into a **private** homelab. Neve
 - Build: `cargo build --release` (needs `libacl1-dev libcrypt-dev libssl-dev
   libsystemd-dev libzstd-dev uuid-dev libclang-dev pkg-config`)
 - Verify: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`
-- Image: `docker build -t siphon:dev .` (or `podman build`)
-- Release: `bump2version patch && git push --follow-tags`
+- Image: `docker build -t siphon:e2e .` (or `podman build`)
+- Host builds need the `-dev` libs above; without them, run tests in the
+  builder stage: `docker build --target build -t siphon-build .` and
+  `docker run --rm -v "$PWD":/w -w /w siphon-build cargo test`
+- E2E: `SIPHON_IMAGE=siphon:e2e e2e/run.sh` (needs docker/podman compose,
+  aws CLI v2, jq; `KEEP=1` keeps the containers)
+- Release: `bump2version patch && git push --follow-tags` (CI pushes the image,
+  `release.yml` creates the GitHub release with git-cliff notes)
 
 ## Critical rules
 - User directives are absolute: if the user says `DO NOT <action>`, do not perform that action without explicit permission.
 - Never edit credential/config files or fabricate/overwrite credentials unless the user explicitly asks.
 - Preserve user data and configuration; ask before changing if in doubt. Do not undo user choices in favor of your own approach without discussing first.
-- siphon must only **read** from S3. Never add code paths that write to or delete from the source bucket.
+- `backup` must only **read** from S3. Only `restore` writes, only to its target bucket, and never deletes objects.
 - Keep links absolute unless requested otherwise; prefer minimal, targeted patches.
 - Every text file must end with a final newline (`\n`) — no trailing-newline-less files.
 

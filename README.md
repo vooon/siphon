@@ -7,13 +7,33 @@ as a PBS snapshot using the same client crates as `proxmox-backup-client`.
 Nothing is staged on local disk, so the bucket isn't copied twice. Status:
 early development; see [docs/DESIGN.md](https://github.com/vooon/siphon/blob/main/docs/DESIGN.md).
 
+## Usage
+
+Every option is also an environment variable; see `siphon backup --help`.
+
+```
+export PBS_REPOSITORY='backup@pbs!siphon@pbs.example.com:store'
+export PBS_PASSWORD=...  PBS_FINGERPRINT=...
+export S3_ENDPOINT=https://s3.example.com S3_BUCKET=my-bucket
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+
+siphon backup                                   # -> host/my-bucket/<now>, my-bucket.pxar
+siphon restore --snapshot host/my-bucket \
+               --s3-bucket my-bucket-restored   # latest snapshot -> bucket
+```
+
+Object metadata (Content-Type and friends, `x-amz-meta-*`, ETag, version ID)
+is kept as `user.s3.*` xattrs in the archive and put back on restore.
+
 ## Container image
 
 ```
 ghcr.io/vooon/siphon:<version>
 ```
 
-Built by GitHub Actions from `main` and from `v*` tags.
+Built by GitHub Actions from `main` and from `v*` tags, after an end-to-end
+test against rustfs and PBS (`e2e/run.sh`). Releases with a linux-amd64
+binary are on the GitHub releases page.
 
 ## Building
 

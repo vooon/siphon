@@ -3,8 +3,10 @@
 Back up an S3 bucket (e.g. a Ceph RGW bucket holding CloudNativePG/Barman base
 backups + WAL) straight into Proxmox Backup Server, so it reaches PBS
 retention and tape — without a local copy of the bucket, without patching
-`proxmox-backup-client`. Status: skeleton builds against `pbs-client` 4.2.3;
-data path not implemented yet (2026-10-08).
+`proxmox-backup-client`. And restore it back into a bucket, metadata included.
+
+Status (2026-10-08): phase 1 (full read each run) works end to end against
+rustfs and a containerised PBS 4.2 (`e2e/run.sh`). Not deployed yet.
 
 ## Why a dedicated tool
 
@@ -18,8 +20,7 @@ data path not implemented yet (2026-10-08).
 ## Building against Proxmox crates
 
 Proxmox's crates aren't usable from crates.io, so they all come from
-`git.proxmox.com` (verified: `cargo build` of the skeleton works, the
-container image builds):
+`git.proxmox.com`:
 
 - `pbs-client` and `pbs-datastore` are members of the `proxmox-backup`
   workspace and are taken as git dependencies pinned to a commit. Proxmox
@@ -52,88 +53,146 @@ Sources: https://git.proxmox.com/?p=proxmox-backup.git ,
 https://git.proxmox.com/?p=pxar.git , https://git.proxmox.com/?p=proxmox.git ,
 protocol: https://pbs.proxmox.com/docs/backup-protocol.html
 
-## Data flow
+## S3 client
+
+`aws-sdk-s3` (rustls). `proxmox-s3-client` was the first choice since it is
+already in the dependency graph, but it drops every response header except
+size, ETag, Content-Type and Last-Modified (so no `x-amz-meta-*`), can't set
+metadata on upload and has no multipart upload — restore needs all three.
+
+- Path-style (`endpoint/bucket/key`) or virtual-hosted style
+  (`bucket.endpoint/key`, the default): `--s3-path-style`.
+- Checksum trailers are only sent/validated when an operation requires them
+  (`WhenRequired`), since not every S3-compatible store supports the SDK's
+  newer defaults.
+- TLS roots come from the system store; a private CA can be added with
+  `SSL_CERT_FILE`.
+
+## Backup data flow
 
 ```
-S3 ListObjectsV2 (sorted keys)
-  └─ per object: GetObject body (async stream)
-       └─ pxar::encoder (aio): directory entries for key prefixes,
-          create_file(metadata, name, size) <- copy the body in
-             └─ byte stream ─▶ pbs_client::ChunkStream (dynamic chunking)
+S3 ListObjectsV2 (all pages) ─▶ key tree (tree.rs)
+  └─ per file, depth first: GetObject (body stream + headers)
+       └─ pxar::encoder::aio: create_directory / create_file(metadata+xattrs, size)
+          <- body copied in, MD5 checked against a plain ETag
+             └─ pipe ─▶ pbs_client::ChunkStream (dynamic chunking)
                   └─ BackupWriter::upload_stream("<archive>.pxar.didx")
   └─ manifest (index.json.blob) ─▶ BackupWriter::finish()
 ```
 
-- Memory stays constant: one object body in flight at a time.
-- Archive tree: `<bucket>/<object key>` as directories and files.
-  Metadata: `mtime` = S3 `LastModified`, size from the listing, mode `0644`
-  (`0755` for directories), owner 0:0. Optionally the ETag as an xattr
-  (`user.s3.etag`) for verification.
-- PBS layout, like other file backups: namespace from `PBS_NAMESPACE`,
-  group `host/<PBS_BACKUP_ID>`, archive `<PBS_ARCHIVE>.pxar`.
-- S3 client: `proxmox-s3-client` (already in the dependency graph; PBS uses it
-  for S3 datastores). It has `list_objects_v2` (with continuation token),
-  `get_object` (streamed body), path-style addressing and a fingerprint
-  option for self-signed endpoints. To verify: its
-  `S3_HTTP_REQUEST_TIMEOUT` (30 min) must not cut off a long body read of a
-  large base backup.
+- One object body in flight; no local staging. The key list is held in
+  memory (fine for tens of thousands of keys).
+- Any error drops the upload before `finish`, so PBS discards the snapshot.
+- An object deleted between listing and reading (retention cleanup) is
+  skipped with a warning. Barman never modifies objects, so a run is a
+  consistent set of "base backups + WAL up to the listing time".
+- PBS layout: namespace `--ns`, group `<--backup-type>/<--backup-id>`
+  (default `host/<bucket>`), archive `<--archive>.pxar` (default bucket name).
+  Unencrypted for now.
 
-API names to verify against the pinned revision (they move between releases):
-`pbs_client::{HttpClient, HttpClientOptions, BackupRepository,
-BackupWriter, ChunkStream, UploadOptions}`, `BackupWriter::start(...)`,
-`upload_stream(...)`, `upload_blob_from_data(...)` for the manifest,
-`pxar::encoder::aio::Encoder::{create_file, create_directory, finish}`.
-`proxmox-backup-client`'s own `backup` command (`proxmox-backup-client/src/main.rs`)
-is the reference for the call sequence.
+### Archive tree
+
+The archive root is the bucket root: key `a/b/c` is file `c` in directory
+`a/b`. Files are mode `0644`, directories `0755`, owner 0:0; file mtime is
+S3 `LastModified`, directory mtime the newest file below it.
+
+Keys that can't be a path are stored flat as
+`.siphon/keys/<sha256(key)>` with the real key in `user.s3.key`:
+empty components (`a//b`, `dir/` folder markers, leading `/`), `.`/`..`
+components, components over 255 bytes, keys under `.siphon/`, and a key that
+is also a prefix of other keys (`a` next to `a/b`: the file `a` is escaped).
+
+### Metadata as xattrs
+
+Taken from the `GetObject` response headers, so no extra request:
+
+| xattr | from |
+|---|---|
+| `user.s3.etag` | `ETag` |
+| `user.s3.version-id` | `x-amz-version-id` (absent / `null` on unversioned buckets) |
+| `user.s3.content-type`, `…content-encoding`, `…content-disposition`, `…content-language`, `…cache-control` | same-named headers |
+| `user.s3.meta.<name>` | `x-amz-meta-<name>` |
+| `user.s3.key` | original key, escaped entries only |
+
+All under `user.` so `proxmox-backup-client restore` to a directory keeps
+them. Not kept: tags (extra request per object), storage class, SSE settings.
+
+## Restore
+
+`siphon restore --snapshot host/<id>[/<time>]` (a group means its latest
+finished snapshot) reads the archive through `BackupReader` +
+`pxar::accessor::aio`, and uploads every file to `--s3-bucket` under its key
+(`user.s3.key` if set, else its path), with Content-* headers and user
+metadata from the xattrs.
+
+- Objects up to `--part-size` (64 MiB) are buffered and sent with PutObject;
+  larger ones use multipart upload with buffered parts (aborted on error).
+- Refuses a bucket (or `--s3-prefix`) that already has objects unless
+  `--overwrite`; `--dry-run` only lists keys and sizes.
+- Not restorable by any S3 client: `LastModified`, version IDs, and the ETag
+  of multipart objects. For single-part objects the new ETag is compared with
+  the old one (warning on mismatch).
+- Also possible without siphon: `proxmox-backup-client restore <snapshot>
+  <archive>.pxar <dir>` and `rclone copy` — loses the metadata.
 
 ## Phases
 
-1. **Full read each run.** Stream every object; PBS deduplication keeps
-   storage flat (Barman objects never change), but every run re-downloads
-   the whole bucket. Acceptable while the bucket is small.
-2. **Reuse unchanged objects** (like the client's `--change-detection-mode=metadata`):
-   split archive (`.mpxar` metadata + `.ppxar` payload). For each object whose
-   key, size and ETag/LastModified match the previous snapshot's metadata
-   archive, reference the previous payload chunks instead of downloading the
-   object (the client's "payload reuse / injection" path). Only new WAL and
-   new base backups get read. This is the main reason to build on
-   `pbs-client` rather than reimplementing the protocol.
+1. **Full read each run** (done). Stream every object; PBS deduplication keeps
+   storage flat, but every run re-downloads the whole bucket.
+2. **Reuse unchanged objects** (later; like the client's
+   `--change-detection-mode=metadata`): split archive (`.mpxar` metadata +
+   `.ppxar` payload). An object whose key, size, ETag and LastModified (all in
+   the listing) match the previous snapshot's metadata archive gets no S3
+   request: its entry and xattrs are copied from the previous `.mpxar` and its
+   payload references the previous chunks. Only new WAL and base backups are
+   read. The work: `pbs_client::pxar::create_archive`'s reuse/injection logic
+   walks a real directory, so it has to be rebuilt for our key tree.
+3. **All versions** (maybe): `ListObjectVersions`, older versions in a side
+   tree (`<key>/.versions/<mtime>_<version-id>`), restored oldest first.
 
-## Configuration (environment)
+## Configuration
 
-`PBS_REPOSITORY`, `PBS_PASSWORD` (API token secret), `PBS_FINGERPRINT`,
-`PBS_NAMESPACE`, `PBS_BACKUP_ID`, `PBS_ARCHIVE` (default: bucket name),
-`S3_ENDPOINT` (e.g. `https://s3.example.com`), `S3_BUCKET`, `S3_PREFIX` (optional),
-`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (a **read-only** user),
-`HC_PING_URL` (Healthchecks `/start`, `/<exit code>`), `GOTIFY_*` (optional).
+Every option is a flag and an environment variable (`siphon <cmd> --help`).
 
-## Consistency and restore
+| Variable | Flag | Notes |
+|---|---|---|
+| `PBS_REPOSITORY` | `--repository` | `user@realm!token@host[:port]:datastore` |
+| `PBS_PASSWORD` / `PBS_PASSWORD_FILE` | `--password` / `--password-file` | API token secret |
+| `PBS_FINGERPRINT` | `--fingerprint` | for a self-signed PBS certificate |
+| `PBS_NAMESPACE` | `--ns` | default: root |
+| `PBS_BACKUP_TYPE`, `PBS_BACKUP_ID` | `--backup-type`, `--backup-id` | backup; default `host`, bucket name |
+| `PBS_ARCHIVE` | `--archive` | default: bucket name (backup), backup ID (restore) |
+| `PBS_SNAPSHOT` | `--snapshot` | restore |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_PATH_STYLE` | `--s3-endpoint`, `--s3-region`, `--s3-path-style` | region default `us-east-1` |
+| `S3_BUCKET`, `S3_PREFIX` | `--s3-bucket`, `--s3-prefix` | |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `--s3-access-key-id`, `--s3-secret-access-key` | a read-only user for backup |
+| `SIPHON_PART_SIZE` | `--part-size` | restore |
+| `SIPHON_SKIP_ETAG_CHECK` | `--skip-etag-check` | backup |
+| `RUST_LOG` | | default `info` |
 
-- Barman writes objects once and never modifies them; a run is a consistent
-  set of "base backups + WAL up to the listing time". An object deleted
-  between listing and reading (retention cleanup) is skipped with a warning.
-- Restore: `proxmox-backup-client restore <snapshot> <archive>.pxar <dir>`
-  (or single files from the PBS UI), then upload the directory to a bucket
-  (`rclone copy`) and point a CNPG `Cluster` recovery at it.
+Healthchecks/Gotify pings are left to the CronJob wrapper for now.
 
-## Build, release, deployment
+## Build, test, release
 
-- Source and CI on GitHub (`vooon/siphon`). GitHub Actions
-  (`.github/workflows/ci.yml`): fmt, clippy, tests; then the image is built
-  with Buildx and pushed to `ghcr.io/vooon/siphon` on `main` and on `v*` tags
-  (PRs build only). Tags: branch, `sha-…`, and `X.Y.Z` / `X.Y` from the git tag.
-- `Dockerfile`: builder `rust:1-trixie` (+ the `-dev` libs above), runtime
-  `debian:trixie-slim` with the matching shared libraries, runs as nobody.
-- Versioning: `bump2version` (`.bumpversion.cfg`) bumps `Cargo.toml` and
-  `Cargo.lock`, commits and tags `vX.Y.Z`.
-- Deployment (private homelab GitOps repo, not here): nightly CronJob after
-  the CNPG base backups, image tracked by Renovate; secrets in SOPS;
-  a Healthchecks check. Source bucket access through a read-only user with
-  `s3:GetObject`/`s3:ListBucket` only.
+- GitHub Actions `ci.yml`: fmt, clippy, unit tests → e2e → image pushed to
+  `ghcr.io/vooon/siphon` (on `main` and `v*` tags; PRs build only).
+- e2e (`e2e/run.sh`, compose): rustfs (pinned) and
+  `ayufan/proxmox-backup-server` (unofficial PBS image, pinned) on
+  localhost; bootstraps a datastore and API token with
+  `proxmox-backup-manager`, seeds a bucket (metadata, a multipart-uploaded
+  object, escaped keys, Unicode), runs backup twice, PBS verify, restore
+  (dry run, real, refusal without `--overwrite`) and compares every body and
+  header. rustfs rejects `a//b`, `./x`, `a/../b`; those are covered by unit
+  tests only. The PBS image has no `proxmox-backup-client`, so restore with
+  the official client isn't tested.
+- Release: `bump2version` → tag `vX.Y.Z` → `release.yml` checks the tag
+  against `Cargo.toml`, builds the binary (Dockerfile `artifact` stage,
+  linux-amd64, glibc/trixie), writes notes with git-cliff from Conventional
+  Commits, and creates the GitHub release. The image comes from `ci.yml`.
+- Dependabot: cargo, actions, Dockerfile, e2e compose; weekly, 7-day cooldown.
 
-## Testing
+## Deployment (private GitOps repo, not here)
 
-- Unit: pxar encoding of a fake object list; restore and compare with
-  `proxmox-backup-client restore`.
-- Integration: a test bucket and a test namespace on PBS; restore, then a
-  CNPG recovery from the restored copy.
+Nightly CronJob after the CNPG base backups, image tracked by Renovate or
+Dependabot; secrets in SOPS; a Healthchecks check. Source bucket access
+through a read-only user with `s3:GetObject`/`s3:ListBucket` only.
