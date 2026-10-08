@@ -1,0 +1,25 @@
+# End-to-end test environment: an S3 store and a PBS server.
+# Used by e2e/run.sh; ports are bound to localhost only.
+name: siphon-e2e
+
+services:
+  rustfs:
+    container_name: siphon-e2e-rustfs
+    image: docker.io/rustfs/rustfs:1.0.1
+    environment:
+      RUSTFS_ACCESS_KEY: e2e-access
+      RUSTFS_SECRET_KEY: e2e-secret-key
+    ports:
+      - "127.0.0.1:9000:9000"
+    tmpfs:
+      - /data:mode=1777
+
+  pbs:
+    container_name: siphon-e2e-pbs
+    # unofficial build of Proxmox Backup Server for containers
+    image: docker.io/ayufan/proxmox-backup-server:v4.2.0
+    ports:
+      - "127.0.0.1:8007:8007"
+    tmpfs:
+      - /run  # PBS keeps its shared memory there and insists on tmpfs
+      - /datastore
