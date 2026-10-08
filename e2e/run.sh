@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# End-to-end test: rustfs bucket -> siphon backup -> PBS -> siphon restore ->
+# second rustfs bucket, then compare bodies and metadata object by object.
+#
+# Needs: docker (or podman) with compose, aws CLI v2, jq, and the siphon image
+# (default `siphon:e2e`, override with SIPHON_IMAGE).
+# KEEP=1 leaves the containers running afterwards.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+DOCKER=${DOCKER:-docker}
+IMAGE=${SIPHON_IMAGE:-siphon:e2e}
+WORK=$(mktemp -d)
+
+export AWS_ACCESS_KEY_ID=e2e-access
+export AWS_SECRET_ACCESS_KEY=e2e-secret-key
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ENDPOINT_URL=http://127.0.0.1:9000
+export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+
+cleanup() {
+    rm -rf "$WORK"
+    if [[ -z ${KEEP:-} ]]; then
+        $DOCKER compose down -v >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
+
+step() { echo "=== $*"; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pbs() { $DOCKER exec siphon-e2e-pbs "$@"; }
+s3() { aws s3api "$@"; }
+
+wait_for() {
+    for _ in $(seq 1 60); do
+        curl -sk -o /dev/null "$1" && return 0
+        sleep 2
+    done
+    fail "$1 did not come up"
+}
+
+step "start rustfs and PBS"
+$DOCKER compose up -d
+wait_for http://127.0.0.1:9000/
+wait_for https://127.0.0.1:8007/
+
+step "bootstrap PBS: datastore, API token, ACL"
+pbs sh -c 'mkdir -p /datastore/e2e && chown backup:backup /datastore/e2e'
+pbs proxmox-backup-manager datastore create e2e /datastore/e2e >/dev/null
+pbs proxmox-backup-manager user create siphon@pbs
+PBS_PASSWORD=$(pbs proxmox-backup-manager user generate-token siphon@pbs e2e |
+    sed 's/^Result: //' | jq -r .value)
+for id in 'siphon@pbs' 'siphon@pbs!e2e'; do
+    pbs proxmox-backup-manager acl update /datastore/e2e DatastoreBackup --auth-id "$id"
+done
+PBS_FINGERPRINT=$(pbs proxmox-backup-manager cert info | sed -n 's/^Fingerprint (sha256): //p')
+export PBS_PASSWORD PBS_FINGERPRINT
+
+siphon() {
+    $DOCKER run --rm --network host \
+        -e PBS_REPOSITORY='siphon@pbs!e2e@127.0.0.1:e2e' \
+        -e PBS_PASSWORD -e PBS_FINGERPRINT \
+        -e S3_ENDPOINT="$AWS_ENDPOINT_URL" -e S3_PATH_STYLE=true \
+        -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+        -e SIPHON_PART_SIZE=$((5 << 20)) \
+        "$IMAGE" "$@"
+}
+
+step "seed bucket 'source'"
+s3 create-bucket --bucket source >/dev/null
+s3 create-bucket --bucket restored >/dev/null
+head -c $((1 << 20)) /dev/urandom >"$WORK/wal"
+head -c $((12 << 20)) /dev/urandom >"$WORK/base"
+: >"$WORK/empty"
+echo hello >"$WORK/small"
+put() { s3 put-object --bucket source --key "$1" --body "$2" "${@:3}" >/dev/null; }
+put wal/000000010000000000000001 "$WORK/wal" \
+    --content-type application/octet-stream --metadata barman=wal,timeline=1
+# multipart upload on the source side (ETag "<md5>-<parts>")
+aws s3 cp --quiet "$WORK/base" s3://source/base/20261008T031500/data.tar \
+    --content-type application/x-tar --cache-control no-cache --metadata kind=base
+put empty "$WORK/empty"
+# rustfs rejects keys like "a//b", "./x", "a/../b"; the escaping of those is
+# covered by unit tests (src/tree.rs).
+put "dir/" "$WORK/empty"                           # folder marker
+put a "$WORK/small"                                # file and ...
+put a/b "$WORK/small"                              # ... directory with the same name
+put "/lead" "$WORK/small" --content-language de    # stored as "lead" by rustfs
+put "ünïcödé/fïlé with space.txt" "$WORK/small" \
+    --content-type "text/plain; charset=utf-8" --content-disposition attachment
+
+step "siphon backup (twice: second run must work with a previous snapshot)"
+siphon backup --s3-bucket source
+sleep 2 # snapshot times have 1 s resolution
+siphon backup --s3-bucket source
+
+step "PBS verify"
+pbs proxmox-backup-manager verify e2e | tail -1 | grep -q 'TASK OK' || fail "verify"
+
+step "siphon restore --dry-run lists every object"
+expected=$(s3 list-objects-v2 --bucket source | jq '.Contents | length')
+listed=$(siphon restore --s3-bucket restored --snapshot host/source --dry-run | wc -l)
+[[ $listed -eq $expected ]] || fail "dry run listed $listed of $expected objects"
+
+step "siphon restore into 'restored'"
+siphon restore --s3-bucket restored --snapshot host/source
+
+step "restore refuses a non-empty bucket without --overwrite"
+if siphon restore --s3-bucket restored --snapshot host/source 2>/dev/null; then
+    fail "restore into non-empty bucket succeeded"
+fi
+
+step "compare objects"
+keys() { s3 list-objects-v2 --bucket "$1" | jq -r '.Contents[].Key' | sort; }
+diff <(keys source) <(keys restored) || fail "key lists differ"
+meta() {
+    s3 head-object --bucket "$1" --key "$2" | jq -S '{ContentLength, ContentType,
+        CacheControl, ContentEncoding, ContentDisposition, ContentLanguage, Metadata}'
+}
+n=0
+while IFS= read -r key; do
+    s3 get-object --bucket source --key "$key" "$WORK/src" >/dev/null
+    s3 get-object --bucket restored --key "$key" "$WORK/dst" >/dev/null
+    cmp -s "$WORK/src" "$WORK/dst" || fail "body differs: $key"
+    diff <(meta source "$key") <(meta restored "$key") || fail "metadata differs: $key"
+    n=$((n + 1))
+done < <(keys source)
+
+echo "PASS: $n objects round-tripped"

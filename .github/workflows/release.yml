@@ -1,0 +1,54 @@
+name: Release
+
+# The container image for the tag is published by ci.yml; this workflow
+# creates the GitHub release with notes and the binary.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # git-cliff needs the history since the previous tag
+
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || {
+            echo "tag $GITHUB_REF_NAME != Cargo.toml version $version"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v4
+      - name: Build binary (Debian trixie, glibc)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: artifact
+          outputs: type=local,dest=dist
+          cache-from: type=gha
+      - name: Package
+        run: |
+          name=siphon-${GITHUB_REF_NAME#v}-linux-amd64
+          mkdir "$name" && cp dist/siphon LICENSE README.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > sha256sums.txt
+
+      - name: Release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            siphon-*.tar.gz
+            sha256sums.txt
