@@ -104,6 +104,21 @@ siphon backup --s3-bucket source
 step "PBS verify"
 pbs proxmox-backup-manager verify e2e | tail -1 | grep -q 'TASK OK' || fail "verify"
 
+step "PBS web UI: catalog browsing and single-file download"
+api() {
+    curl -skf -H "Authorization: PBSAPIToken=siphon@pbs!e2e:$PBS_PASSWORD" \
+        "https://127.0.0.1:8007/api2/json/admin/datastore/e2e/$1"
+}
+b64() { printf %s "$1" | base64 -w0; }
+time=$(api snapshots | jq '.data | max_by(."backup-time") | ."backup-time"')
+snap="backup-type=host&backup-id=source&backup-time=$time"
+api "catalog?$snap&filepath=$(b64 /source.pxar.didx/ünïcödé)" |
+    jq -e '.data == [{"text": "fïlé with space.txt", "type": "f", "size": 6}] or
+        (.data | length == 1 and .[0].size == 6)' >/dev/null || fail "catalog listing"
+api "pxar-file-download?$snap&filepath=$(b64 /source.pxar.didx/wal/000000010000000000000001)" \
+    >"$WORK/download"
+cmp -s "$WORK/wal" "$WORK/download" || fail "single-file download differs"
+
 step "siphon restore --dry-run lists every object"
 expected=$(s3 list-objects-v2 --bucket source | jq '.Contents | length')
 listed=$(siphon restore --s3-bucket restored --snapshot host/source --dry-run | wc -l)
