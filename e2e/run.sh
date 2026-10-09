@@ -76,8 +76,13 @@ siphon() {
 step "seed bucket 'source'"
 s3 create-bucket --bucket source >/dev/null
 s3 create-bucket --bucket restored >/dev/null
-head -c $((1 << 20)) /dev/urandom >"$WORK/wal"
-head -c $((12 << 20)) /dev/urandom >"$WORK/base"
+# Deterministic pseudo-random data, so chunk boundaries (and reuse figures) are
+# the same on every run.
+data() { head -c "$2" /dev/zero | openssl enc -aes-128-ctr -nosalt -pbkdf2 -pass "pass:$1"; }
+data wal1 $((1 << 20)) >"$WORK/wal"
+# > 2 x the chunker's 16 MiB maximum chunk size: chunks inside it are always
+# reused when a later object changes (see the reuse checks below)
+data base $((40 << 20)) >"$WORK/base"
 : >"$WORK/empty"
 echo hello >"$WORK/small"
 put() { s3 put-object --bucket source --key "$1" --body "$2" "${@:3}" >/dev/null; }
@@ -96,10 +101,23 @@ put "/lead" "$WORK/small" --content-language de    # stored as "lead" by rustfs
 put "ünïcödé/fïlé with space.txt" "$WORK/small" \
     --content-type "text/plain; charset=utf-8" --content-disposition attachment
 
-step "siphon backup (twice: second run must work with a previous snapshot)"
-siphon backup --s3-bucket source
+step "siphon backup: first, unchanged, one new object (reuse 0%, 100%, partial)"
+siphon backup --s3-bucket source 2>&1 | tee "$WORK/backup1.log"
 sleep 2 # snapshot times have 1 s resolution
-siphon backup --s3-bucket source
+siphon backup --s3-bucket source 2>&1 | tee "$WORK/backup2.log"
+grep -q 'reused 0 B (0.0%)' "$WORK/backup1.log" || fail "first backup reported reuse"
+# nothing changed: the second run must reuse every chunk of the archive
+grep -q 'reused .* (100.0%)' "$WORK/backup2.log" || fail "second backup did not reuse all chunks"
+# a new WAL segment arrives: part of the archive is reused. The 40 MiB base
+# backup sorts before wal/ and is unchanged; with chunks cut at 16 MiB at the
+# latest, at least two chunks inside it are identical in both runs, so > 0.
+data wal2 $((1 << 20)) >"$WORK/wal2"
+put wal/000000010000000000000002 "$WORK/wal2" \
+    --content-type application/octet-stream --metadata barman=wal,timeline=1
+sleep 1
+siphon backup --s3-bucket source 2>&1 | tee "$WORK/backup3.log"
+pct=$(sed -n 's/.*reused .* (\([0-9.]*\)%).*/\1/p' "$WORK/backup3.log")
+awk -v p="$pct" 'BEGIN { exit !(p > 0 && p < 100) }' || fail "third backup reused $pct%"
 
 step "PBS verify"
 pbs proxmox-backup-manager verify e2e | tail -1 | grep -q 'TASK OK' || fail "verify"
@@ -149,9 +167,9 @@ while IFS= read -r key; do
 done < <(keys source)
 
 step "healthchecks pings"
-# 5 runs: 2 backups, dry run, restore, refused restore
+# 6 runs: 3 backups, dry run, restore, refused restore
 hc() { jq -s "$1" "$WORK/hc.jsonl"; }
-[[ $(hc '[.[] | select(.path == "/ping/e2e/start")] | length') -eq 5 ]] || fail "start pings"
+[[ $(hc '[.[] | select(.path == "/ping/e2e/start")] | length') -eq 6 ]] || fail "start pings"
 # every start is paired with exactly one success or fail ping of the same run ID
 [[ $(hc 'group_by(.rid) | map(length == 2 and .[0].rid != "") | all') == true ]] ||
     fail "unpaired pings: $(cat "$WORK/hc.jsonl")"

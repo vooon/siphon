@@ -1,16 +1,21 @@
 //! `siphon backup`: bucket listing -> pxar -> PBS snapshot.
 
+use std::collections::HashSet;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result, bail, format_err};
 use aws_sdk_s3::Client;
+use futures::TryStreamExt;
 use futures::future::LocalBoxFuture;
 use openssl::hash::{Hasher, MessageDigest};
 use pbs_api_types::{BackupDir, CATALOG_NAME, CryptMode, MANIFEST_BLOB_NAME};
 use pbs_client::{BackupWriter, BackupWriterOptions, ChunkStream, UploadOptions};
 use pbs_datastore::catalog::{BackupCatalogWriter, CatalogWriter};
 use pbs_datastore::manifest::BackupManifest;
+use proxmox_human_byte::HumanByte;
 use pxar::encoder::SeqWrite;
 use pxar::encoder::aio::Encoder;
 use pxar::{Metadata, PxarVariant};
@@ -79,14 +84,44 @@ pub async fn run(args: BackupArgs) -> Result<String> {
     )
     .await?;
 
-    // pxar encoder -> pipe -> chunker -> upload, all in this task.
-    let (pipe_tx, pipe_rx) = tokio::io::duplex(1 << 20);
-    let chunks = ChunkStream::new(ReaderStream::new(pipe_rx), None, None, None);
+    // Like proxmox-backup-client: with the previous manifest, upload_stream
+    // skips chunks the previous snapshot already has.
+    let previous_manifest = previous_manifest(&writer).await;
     let upload_options = UploadOptions {
         compress: true,
+        previous_manifest: previous_manifest.clone(),
         ..UploadOptions::default()
     };
-    let upload = writer.upload_stream(&archive, chunks, upload_options, None);
+
+    // Reuse accounting. pbs-client computes the same numbers but keeps them
+    // private, so we track known chunks ourselves: the previous archive's
+    // plus every chunk seen so far in this run.
+    let known = Arc::new(Mutex::new(HashSet::new()));
+    if let Some(manifest) = &previous_manifest
+        && manifest
+            .files()
+            .iter()
+            .any(|f| f.filename == archive.as_ref())
+        && let Err(err) = writer
+            .download_previous_dynamic_index(&archive, manifest, known.clone())
+            .await
+    {
+        log::warn!("can't read previous index, reuse not reported: {err:#}");
+    }
+    let reused = Arc::new(AtomicU64::new(0));
+
+    // pxar encoder -> pipe -> chunker -> upload, all in this task.
+    let (pipe_tx, pipe_rx) = tokio::io::duplex(1 << 20);
+    let chunks = ChunkStream::new(ReaderStream::new(pipe_rx), None, None, None).inspect_ok({
+        let reused = reused.clone();
+        move |chunk| {
+            let digest = openssl::sha::sha256(chunk);
+            if !known.lock().unwrap().insert(digest) {
+                reused.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+        }
+    });
+    let upload = writer.upload_stream(&archive, chunks, upload_options.clone(), None);
 
     let mut catalog = Vec::new();
     let mut ctx = Ctx {
@@ -120,15 +155,7 @@ pub async fn run(args: BackupArgs) -> Result<String> {
         None,
     );
     let catalog_stats = writer
-        .upload_stream(
-            &CATALOG_NAME,
-            catalog_chunks,
-            UploadOptions {
-                compress: true,
-                ..UploadOptions::default()
-            },
-            None,
-        )
+        .upload_stream(&CATALOG_NAME, catalog_chunks, upload_options, None)
         .await?;
 
     let mut manifest = BackupManifest::new(snapshot.clone());
@@ -162,15 +189,50 @@ pub async fn run(args: BackupArgs) -> Result<String> {
         bytes,
         vanished,
     } = stats;
+    let reused = reused.load(Ordering::Relaxed);
     let summary = format!(
-        "backup {}{snapshot} done: {files} files, {bytes} bytes, archive {} bytes, \
+        "backup {}{snapshot} done: {files} files, {}, archive {}, reused {} ({:.1}%), \
          {vanished} vanished, {:.1}s",
         ns_prefix(ns),
-        upload_stats.size,
+        HumanByte::from(bytes),
+        HumanByte::from(upload_stats.size),
+        HumanByte::from(reused),
+        percent(reused, upload_stats.size),
         start.elapsed().as_secs_f64()
     );
     log::info!("{summary}");
     Ok(summary)
+}
+
+/// Manifest of the previous snapshot in the group, if there is a usable one.
+async fn previous_manifest(writer: &BackupWriter) -> Option<Arc<BackupManifest>> {
+    match writer.previous_backup_time().await {
+        Ok(Some(_)) => {}
+        Ok(None) => return None,
+        Err(err) => {
+            log::warn!("can't get previous backup time: {err:#}");
+            return None;
+        }
+    }
+    let manifest = writer
+        .download_previous_manifest()
+        .await
+        .and_then(|m| m.check_fingerprint(None).map(|()| m));
+    match manifest {
+        Ok(manifest) => Some(Arc::new(manifest)),
+        Err(err) => {
+            log::warn!("can't use previous manifest, uploading everything: {err:#}");
+            None
+        }
+    }
+}
+
+fn percent(part: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        part as f64 * 100.0 / total as f64
+    }
 }
 
 fn dir_metadata(dir: &Dir) -> Metadata {

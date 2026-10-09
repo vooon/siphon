@@ -84,6 +84,15 @@ S3 ListObjectsV2 (all pages) ─▶ key tree (tree.rs)
 - One object body in flight; no local staging. The key list is held in
   memory (fine for tens of thousands of keys).
 - Any error drops the upload before `finish`, so PBS discards the snapshot.
+- Chunk reuse: like `proxmox-backup-client`, the previous snapshot's manifest
+  is passed to `upload_stream`, which then only uploads chunks the previous
+  archive doesn't have (PBS also dedups on disk, but this saves the transfer
+  to PBS). `pbs-client` keeps its reuse counters private, so siphon hashes
+  each chunk once more and counts it as reused if it is in the previous
+  index or appeared earlier in the run (the same rule). Reported in the
+  summary line, and so in the Healthchecks success body:
+  `archive 3.1 GiB, reused 3.09 GiB (99.6%)`. Downloading from S3 is still
+  a full read in phase 1.
 - Catalog: the PBS web UI browses a unified `.pxar` archive through
   `catalog.pcat1.didx` (one directory named `<archive>.pxar.didx`, then the
   tree with sizes and mtimes), as `proxmox-backup-client` writes it in the
@@ -199,7 +208,8 @@ integrations.
   `proxmox-backup-manager`, seeds a bucket (metadata, a multipart-uploaded
   object, escaped keys, Unicode), runs backup twice, PBS verify, restore
   (dry run, real, refusal without `--overwrite`) and compares every body and
-  header. The web UI's catalog listing and single-file download are checked
+  header. Three backups check reuse: 0% first, 100% unchanged, partial after a
+  new WAL object. The web UI's catalog listing and single-file download are checked
   through the PBS API. A Python stand-in (`e2e/hc-mock.py`) checks the Healthchecks pings:
   start/success/fail pairing by run ID and the message bodies. rustfs rejects `a//b`, `./x`, `a/../b`; those are covered by unit
   tests only. The PBS image has no `proxmox-backup-client`, so restore with
