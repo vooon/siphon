@@ -89,10 +89,10 @@ pub async fn run(args: RestoreArgs) -> Result<String> {
     walk(&root, String::new(), &mut ctx).await?;
 
     let summary = format!(
-        "restore {}{snapshot} done: {} objects, {} bytes{}, {:.1}s",
+        "restore {}{snapshot} done: {} objects, {}{}, {:.1}s",
         ns_prefix(ns),
         ctx.files,
-        ctx.bytes,
+        proxmox_human_byte::HumanByte::from(ctx.bytes),
         if args.dry_run { " (dry run)" } else { "" },
         start.elapsed().as_secs_f64()
     );

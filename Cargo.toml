@@ -28,6 +28,7 @@ pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = 
 # proxmox workspace, resolved through [patch.crates-io] below
 pbs-api-types = "1.0.16"
 proxmox-http = { version = "1", features = ["body", "client"] }
+proxmox-human-byte = "1"
 proxmox-time = "2"
 proxmox-uuid = "1"
 pxar = "1.0.1"

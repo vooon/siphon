@@ -3202,6 +3202,7 @@ dependencies = [
  "pbs-client",
  "pbs-datastore",
  "proxmox-http",
+ "proxmox-human-byte",
  "proxmox-time",
  "proxmox-uuid",
  "pxar",
