@@ -77,12 +77,19 @@ S3 ListObjectsV2 (all pages) ─▶ key tree (tree.rs)
           <- body copied in, MD5 checked against a plain ETag
              └─ pipe ─▶ pbs_client::ChunkStream (dynamic chunking)
                   └─ BackupWriter::upload_stream("<archive>.pxar.didx")
+  └─ catalog (in memory) ─▶ upload_stream("catalog.pcat1.didx")
   └─ manifest (index.json.blob) ─▶ BackupWriter::finish()
 ```
 
 - One object body in flight; no local staging. The key list is held in
   memory (fine for tens of thousands of keys).
 - Any error drops the upload before `finish`, so PBS discards the snapshot.
+- Catalog: the PBS web UI browses a unified `.pxar` archive through
+  `catalog.pcat1.didx` (one directory named `<archive>.pxar.didx`, then the
+  tree with sizes and mtimes), as `proxmox-backup-client` writes it in the
+  default change-detection mode. Split archives (`.mpxar`/`.ppxar`, phase 2)
+  are browsed from the metadata archive and need no catalog. Built in memory
+  (tens of bytes per entry) and uploaded after the archive.
 - An object deleted between listing and reading (retention cleanup) is
   skipped with a warning. Barman never modifies objects, so a run is a
   consistent set of "base backups + WAL up to the listing time".
@@ -192,7 +199,8 @@ integrations.
   `proxmox-backup-manager`, seeds a bucket (metadata, a multipart-uploaded
   object, escaped keys, Unicode), runs backup twice, PBS verify, restore
   (dry run, real, refusal without `--overwrite`) and compares every body and
-  header. A Python stand-in (`e2e/hc-mock.py`) checks the Healthchecks pings:
+  header. The web UI's catalog listing and single-file download are checked
+  through the PBS API. A Python stand-in (`e2e/hc-mock.py`) checks the Healthchecks pings:
   start/success/fail pairing by run ID and the message bodies. rustfs rejects `a//b`, `./x`, `a/../b`; those are covered by unit
   tests only. The PBS image has no `proxmox-backup-client`, so restore with
   the official client isn't tested.

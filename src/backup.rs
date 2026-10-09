@@ -1,13 +1,15 @@
 //! `siphon backup`: bucket listing -> pxar -> PBS snapshot.
 
+use std::ffi::CString;
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result, bail, format_err};
 use aws_sdk_s3::Client;
 use futures::future::LocalBoxFuture;
 use openssl::hash::{Hasher, MessageDigest};
-use pbs_api_types::{BackupDir, CryptMode, MANIFEST_BLOB_NAME};
+use pbs_api_types::{BackupDir, CATALOG_NAME, CryptMode, MANIFEST_BLOB_NAME};
 use pbs_client::{BackupWriter, BackupWriterOptions, ChunkStream, UploadOptions};
+use pbs_datastore::catalog::{BackupCatalogWriter, CatalogWriter};
 use pbs_datastore::manifest::BackupManifest;
 use pxar::encoder::SeqWrite;
 use pxar::encoder::aio::Encoder;
@@ -31,6 +33,9 @@ struct Ctx<'a> {
     bucket: &'a str,
     check_etag: bool,
     stats: Stats,
+    /// File list for the PBS web UI's browser (`catalog.pcat1.didx`), built
+    /// in memory: a few dozen bytes per entry.
+    catalog: CatalogWriter<&'a mut Vec<u8>>,
 }
 
 /// Returns the summary line.
@@ -83,23 +88,60 @@ pub async fn run(args: BackupArgs) -> Result<String> {
     };
     let upload = writer.upload_stream(&archive, chunks, upload_options, None);
 
+    let mut catalog = Vec::new();
     let mut ctx = Ctx {
         s3: &s3,
         bucket,
         check_etag: !args.skip_etag_check,
         stats: Stats::default(),
+        catalog: CatalogWriter::new(&mut catalog)?,
     };
+    // Like proxmox-backup-client: one catalog directory per archive.
+    ctx.catalog
+        .start_directory(&CString::new(archive.as_ref())?)?;
     let encode = encode(&mut ctx, &root, pipe_tx);
 
     // On error the upload is dropped without `finish`, so PBS discards the
     // incomplete snapshot.
     let (upload_stats, ()) = tokio::try_join!(upload, encode)?;
 
+    let Ctx {
+        stats,
+        catalog: mut catalog_writer,
+        ..
+    } = ctx;
+    catalog_writer.end_directory()?;
+    catalog_writer.finish()?;
+    drop(catalog_writer);
+    let catalog_chunks = ChunkStream::new(
+        futures::stream::iter([Ok::<_, anyhow::Error>(catalog)]),
+        Some(512 << 10),
+        None,
+        None,
+    );
+    let catalog_stats = writer
+        .upload_stream(
+            &CATALOG_NAME,
+            catalog_chunks,
+            UploadOptions {
+                compress: true,
+                ..UploadOptions::default()
+            },
+            None,
+        )
+        .await?;
+
     let mut manifest = BackupManifest::new(snapshot.clone());
     manifest.add_file(
         &archive,
         upload_stats.size,
         upload_stats.csum,
+        CryptMode::None,
+    )?;
+    manifest.add_file(
+        &CATALOG_NAME,
+        catalog_stats.size,
+        catalog_stats.csum,
         CryptMode::None,
     )?;
     let manifest = manifest.to_string(None)?;
@@ -119,7 +161,7 @@ pub async fn run(args: BackupArgs) -> Result<String> {
         files,
         bytes,
         vanished,
-    } = ctx.stats;
+    } = stats;
     let summary = format!(
         "backup {}{snapshot} done: {files} files, {bytes} bytes, archive {} bytes, \
          {vanished} vanished, {:.1}s",
@@ -157,8 +199,10 @@ fn encode_dir<'a, 'e, T: SeqWrite + 'e>(
             match node {
                 Node::Dir(child) => {
                     encoder.create_directory(name, &dir_metadata(child)).await?;
+                    ctx.catalog.start_directory(&CString::new(name.as_str())?)?;
                     encode_dir(encoder, ctx, child).await?;
                     encoder.finish().await?;
+                    ctx.catalog.end_directory()?;
                 }
                 Node::File(file) => encode_file(encoder, ctx, name, file)
                     .await
@@ -237,6 +281,12 @@ async fn encode_file<T: SeqWrite>(
         }
     }
 
+    let mtime_secs = match mtime.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
+    };
+    ctx.catalog
+        .add_file(&CString::new(name)?, size, mtime_secs)?;
     ctx.stats.files += 1;
     ctx.stats.bytes += size;
     log::debug!("{key}: {size} bytes");
