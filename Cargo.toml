@@ -1,6 +1,6 @@
 [package]
 name = "siphon"
-version = "0.2.0"
+version = "0.3.0"
 description = "Back up an S3 bucket into Proxmox Backup Server"
 edition = "2024"
 license = "AGPL-3.0-or-later"
