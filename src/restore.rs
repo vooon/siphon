@@ -32,7 +32,8 @@ struct Ctx<'a> {
     bytes: u64,
 }
 
-pub async fn run(args: RestoreArgs) -> Result<()> {
+/// Returns the summary line.
+pub async fn run(args: RestoreArgs) -> Result<String> {
     let start = Instant::now();
     let http = args.pbs.connect()?;
     let repo = &args.pbs.repository();
@@ -87,14 +88,16 @@ pub async fn run(args: RestoreArgs) -> Result<()> {
     let root = accessor.open_root().await?;
     walk(&root, String::new(), &mut ctx).await?;
 
-    log::info!(
-        "restore done: {} objects, {} bytes{}, {:.1}s",
+    let summary = format!(
+        "restore {}{snapshot} done: {} objects, {} bytes{}, {:.1}s",
+        ns_prefix(ns),
         ctx.files,
         ctx.bytes,
         if args.dry_run { " (dry run)" } else { "" },
         start.elapsed().as_secs_f64()
     );
-    Ok(())
+    log::info!("{summary}");
+    Ok(summary)
 }
 
 /// `type/id/time` as is; `type/id` resolves to the latest finished snapshot.

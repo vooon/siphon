@@ -2,7 +2,7 @@
 # End-to-end test: rustfs bucket -> siphon backup -> PBS -> siphon restore ->
 # second rustfs bucket, then compare bodies and metadata object by object.
 #
-# Needs: docker (or podman) with compose, aws CLI v2, jq, and the siphon image
+# Needs: docker (or podman) with compose, aws CLI v2, jq, python3, and the siphon image
 # (default `siphon:e2e`, override with SIPHON_IMAGE).
 # KEEP=1 leaves the containers running afterwards.
 set -euo pipefail
@@ -20,6 +20,7 @@ export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 
 cleanup() {
+    [[ -n ${HC_PID:-} ]] && kill "$HC_PID" 2>/dev/null
     rm -rf "$WORK"
     if [[ -z ${KEEP:-} ]]; then
         $DOCKER compose down -v >/dev/null 2>&1 || true
@@ -39,6 +40,11 @@ wait_for() {
     done
     fail "$1 did not come up"
 }
+
+step "start healthchecks stand-in"
+python3 -I hc-mock.py 18080 "$WORK/hc.jsonl" &
+HC_PID=$!
+export HC_PING_URL=http://127.0.0.1:18080/ping/e2e
 
 step "start rustfs and PBS"
 $DOCKER compose up -d
@@ -62,7 +68,7 @@ siphon() {
         -e PBS_REPOSITORY='siphon@pbs!e2e@127.0.0.1:e2e' \
         -e PBS_PASSWORD -e PBS_FINGERPRINT \
         -e S3_ENDPOINT="$AWS_ENDPOINT_URL" -e S3_PATH_STYLE=true \
-        -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+        -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e HC_PING_URL \
         -e SIPHON_PART_SIZE=$((5 << 20)) \
         "$IMAGE" "$@"
 }
@@ -127,4 +133,16 @@ while IFS= read -r key; do
     n=$((n + 1))
 done < <(keys source)
 
-echo "PASS: $n objects round-tripped"
+step "healthchecks pings"
+# 5 runs: 2 backups, dry run, restore, refused restore
+hc() { jq -s "$1" "$WORK/hc.jsonl"; }
+[[ $(hc '[.[] | select(.path == "/ping/e2e/start")] | length') -eq 5 ]] || fail "start pings"
+# every start is paired with exactly one success or fail ping of the same run ID
+[[ $(hc 'group_by(.rid) | map(length == 2 and .[0].rid != "") | all') == true ]] ||
+    fail "unpaired pings: $(cat "$WORK/hc.jsonl")"
+hc '[.[] | select(.path == "/ping/e2e")] | map(.body) | any(test("^backup host/source/.* done: 8 files"))' |
+    grep -q true || fail "no backup success ping"
+hc '[.[] | select(.path == "/ping/e2e/fail")] | map(.body) | any(test("not empty"))' |
+    grep -q true || fail "no fail ping for refused restore"
+
+echo "PASS: $n objects round-tripped, healthchecks pinged"

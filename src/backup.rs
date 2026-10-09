@@ -33,7 +33,8 @@ struct Ctx<'a> {
     stats: Stats,
 }
 
-pub async fn run(args: BackupArgs) -> Result<()> {
+/// Returns the summary line.
+pub async fn run(args: BackupArgs) -> Result<String> {
     let start = Instant::now();
     let s3 = s3::client(&args.s3);
     let bucket = args.s3.bucket.as_str();
@@ -119,14 +120,15 @@ pub async fn run(args: BackupArgs) -> Result<()> {
         bytes,
         vanished,
     } = ctx.stats;
-    log::info!(
+    let summary = format!(
         "backup {}{snapshot} done: {files} files, {bytes} bytes, archive {} bytes, \
          {vanished} vanished, {:.1}s",
         ns_prefix(ns),
         upload_stats.size,
         start.elapsed().as_secs_f64()
     );
-    Ok(())
+    log::info!("{summary}");
+    Ok(summary)
 }
 
 fn dir_metadata(dir: &Dir) -> Metadata {

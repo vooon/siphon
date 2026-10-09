@@ -21,7 +21,8 @@ This is a **PUBLIC** repository; it is deployed into a **private** homelab. Neve
   `restore` (snapshot -> bucket). Every option is a clap flag with an `env`
   mapping (see docs/DESIGN.md → Configuration); meant to run as a CronJob.
 - Modules: `cli.rs` (clap), `s3.rs` (client, listing, metadata <-> xattrs),
-  `tree.rs` (key <-> archive path, escaping), `backup.rs`, `restore.rs`.
+  `tree.rs` (key <-> archive path, escaping), `backup.rs`, `restore.rs`,
+  `healthchecks.rs` (pings around every run; ping failures never fail a run).
 - Data flow: S3 `ListObjectsV2` → per object `GetObject` body stream →
   `pxar` encoder → `pbs_client` chunker/`BackupWriter` → manifest → finish.
   Constant memory: one object body in flight; no local staging.
@@ -57,7 +58,7 @@ This is a **PUBLIC** repository; it is deployed into a **private** homelab. Neve
   builder stage: `docker build --target build -t siphon-build .` and
   `docker run --rm -v "$PWD":/w -w /w siphon-build cargo test`
 - E2E: `SIPHON_IMAGE=siphon:e2e e2e/run.sh` (needs docker/podman compose,
-  aws CLI v2, jq; `KEEP=1` keeps the containers)
+  aws CLI v2, jq, python3; `KEEP=1` keeps the containers)
 - Release: `bump2version patch && git push --follow-tags` (CI pushes the image,
   `release.yml` creates the GitHub release with git-cliff notes)
 

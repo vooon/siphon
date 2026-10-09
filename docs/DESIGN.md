@@ -168,9 +168,19 @@ Every option is a flag and an environment variable (`siphon <cmd> --help`).
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `--s3-access-key-id`, `--s3-secret-access-key` | a read-only user for backup |
 | `SIPHON_PART_SIZE` | `--part-size` | restore |
 | `SIPHON_SKIP_ETAG_CHECK` | `--skip-etag-check` | backup |
+| `HC_PING_URL` | `--hc-ping-url` | Healthchecks pings, see below |
 | `RUST_LOG` | | default `info` |
 
-Healthchecks/Gotify pings are left to the CronJob wrapper for now.
+### Healthchecks
+
+With `HC_PING_URL` set (any command), siphon pings `<url>/start` before the
+run, then `<url>` with the summary line as body on success, or `<url>/fail`
+with the error chain on failure; all with the same `?rid=<uuid>` so
+Healthchecks pairs them and measures the run time. Bodies are cut at 100 kB
+(Healthchecks' limit). A ping that fails is retried twice (10 s timeout each)
+and then only logged — it never fails the run. HTTP via `proxmox-http`
+(OpenSSL, system CAs). Gotify and other notifications: use Healthchecks'
+integrations.
 
 ## Build, test, release
 
@@ -182,7 +192,8 @@ Healthchecks/Gotify pings are left to the CronJob wrapper for now.
   `proxmox-backup-manager`, seeds a bucket (metadata, a multipart-uploaded
   object, escaped keys, Unicode), runs backup twice, PBS verify, restore
   (dry run, real, refusal without `--overwrite`) and compares every body and
-  header. rustfs rejects `a//b`, `./x`, `a/../b`; those are covered by unit
+  header. A Python stand-in (`e2e/hc-mock.py`) checks the Healthchecks pings:
+  start/success/fail pairing by run ID and the message bodies. rustfs rejects `a//b`, `./x`, `a/../b`; those are covered by unit
   tests only. The PBS image has no `proxmox-backup-client`, so restore with
   the official client isn't tested.
 - Release: `bump2version` → tag `vX.Y.Z` → `release.yml` checks the tag

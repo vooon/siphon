@@ -18,7 +18,7 @@ hex = "0.4"
 log = "0.4"
 openssl = "0.10"
 serde_json = "1"
-tokio = { version = "1.6", features = ["io-util", "macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.6", features = ["io-util", "macros", "rt-multi-thread", "signal", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
 
 # proxmox-backup workspace: not published, pinned to the server release (see docs/DESIGN.md)
@@ -27,7 +27,9 @@ pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = 
 
 # proxmox workspace, resolved through [patch.crates-io] below
 pbs-api-types = "1.0.16"
+proxmox-http = { version = "1", features = ["body", "client"] }
 proxmox-time = "2"
+proxmox-uuid = "1"
 pxar = "1.0.1"
 
 # Proxmox crates are taken from git.proxmox.com at one revision, so that our

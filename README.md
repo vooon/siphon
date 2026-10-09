@@ -22,6 +22,9 @@ siphon restore --snapshot host/my-bucket \
                --s3-bucket my-bucket-restored   # latest snapshot -> bucket
 ```
 
+Set `HC_PING_URL` to report runs to [Healthchecks](https://healthchecks.io):
+start, then success with a summary or failure with the error.
+
 Object metadata (Content-Type and friends, `x-amz-meta-*`, ETag, version ID)
 is kept as `user.s3.*` xattrs in the archive and put back on restore.
 
