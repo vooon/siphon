@@ -13,6 +13,11 @@ use pbs_client::{BackupRepository, HttpClient, HttpClientOptions};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+
+    /// Healthchecks ping URL (`https://hc-ping.com/<uuid>`): pinged with
+    /// `/start` before the run, then with the summary or `/fail` and the error.
+    #[arg(long, env = "HC_PING_URL", hide_env_values = true, global = true)]
+    pub hc_ping_url: Option<String>,
 }
 
 #[derive(Subcommand)]
