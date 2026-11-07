@@ -5,7 +5,7 @@ name: siphon-e2e
 services:
   rustfs:
     container_name: siphon-e2e-rustfs
-    image: docker.io/rustfs/rustfs:1.0.1
+    image: docker.io/rustfs/rustfs:1.0.4
     environment:
       RUSTFS_ACCESS_KEY: e2e-access
       RUSTFS_SECRET_KEY: e2e-secret-key
