@@ -52,7 +52,7 @@ This is a **PUBLIC** repository; it is deployed into a **private** homelab. Neve
 ## Commands
 - Build: `cargo build --release` (needs `libacl1-dev libcrypt-dev libssl-dev
   libsystemd-dev libzstd-dev uuid-dev libclang-dev pkg-config`)
-- Verify: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`
+- Verify: `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, `cargo audit` (ignores with reasons in `.cargo/audit.toml`)
 - Image: `docker build -t siphon:e2e .` (or `podman build`)
 - Host builds need the `-dev` libs above; without them, run tests in the
   builder stage: `docker build --target build -t siphon-build .` and

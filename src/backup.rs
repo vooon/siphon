@@ -98,10 +98,7 @@ pub async fn run(args: BackupArgs) -> Result<String> {
     // plus every chunk seen so far in this run.
     let known = Arc::new(Mutex::new(HashSet::new()));
     if let Some(manifest) = &previous_manifest
-        && manifest
-            .files()
-            .iter()
-            .any(|f| f.filename == archive.as_ref())
+        && manifest.files().iter().any(|f| f.filename == archive)
         && let Err(err) = writer
             .download_previous_dynamic_index(&archive, manifest, known.clone())
             .await
@@ -175,7 +172,7 @@ pub async fn run(args: BackupArgs) -> Result<String> {
     writer
         .upload_blob_from_data(
             manifest.into_bytes(),
-            MANIFEST_BLOB_NAME.as_ref(),
+            &MANIFEST_BLOB_NAME,
             UploadOptions {
                 compress: true,
                 ..UploadOptions::default()
@@ -215,7 +212,7 @@ async fn previous_manifest(writer: &BackupWriter) -> Option<Arc<BackupManifest>>
         }
     }
     let manifest = writer
-        .download_previous_manifest()
+        .download_previous_manifest(false)
         .await
         .and_then(|m| m.check_fingerprint(None).map(|()| m));
     match manifest {
