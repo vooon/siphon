@@ -24,12 +24,12 @@ Proxmox's crates aren't usable from crates.io, so they all come from
 
 - `pbs-client` and `pbs-datastore` are members of the `proxmox-backup`
   workspace and are taken as git dependencies pinned to a commit. Proxmox
-  doesn't tag every release (no `v4.2.3`…`v4.2.8` tags; only
+  doesn't tag every release (no `v4.2.3`…`v4.2.10` tags; only
   `bump version to 4.2.x-1` commits), so pin by `rev`:
 
   ```toml
-  pbs-client    = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "bc863d45e" } # 4.2.3-1
-  pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "bc863d45e" }
+  pbs-client    = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "1df6dff9c" } # 4.2.10-1
+  pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "1df6dff9c" }
   ```
 
   Pick the commit matching the PBS server (or older), `git log --grep 'bump version'`.
@@ -201,7 +201,10 @@ integrations.
 ## Build, test, release
 
 - GitHub Actions `ci.yml`: fmt, clippy, unit tests → e2e → image pushed to
-  `ghcr.io/vooon/siphon` (on `main` and `v*` tags; PRs build only).
+  `ghcr.io/vooon/siphon` (on `main` and `v*` tags; PRs build only). A
+  separate `audit` job runs `cargo audit`; advisories in crates whose version
+  is fixed by the upstream Proxmox workspaces are listed with a reason in
+  `.cargo/audit.toml` and re-checked on every rev bump.
 - e2e (`e2e/run.sh`, compose): rustfs (pinned) and
   `ayufan/proxmox-backup-server` (unofficial PBS image, pinned) on
   localhost; bootstraps a datastore and API token with

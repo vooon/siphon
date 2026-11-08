@@ -1,0 +1,16 @@
+# `cargo audit` configuration. The advisories below are in crates whose
+# version is fixed by the upstream Proxmox workspaces (proxmox-backup.git,
+# proxmox.git) and cannot be bumped from here; revisit on every rev bump.
+[advisories]
+ignore = [
+    # endian_trait 0.6: double drop on a panicking user `Endian` impl.
+    # pbs-datastore / proxmox-compression dependency, no fixed release.
+    "RUSTSEC-2021-0039",
+    # hickory-proto 0.24: O(n^2) name compression when *encoding* DNS messages.
+    # pbs-client pins hickory-resolver 0.24; siphon only resolves the PBS host.
+    "RUSTSEC-2026-0119",
+    # quick-xml 0.36: DoS on hostile XML. Pulled in by proxmox-s3-client via
+    # pbs-datastore; siphon talks to S3 through aws-sdk-s3, this code never runs.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

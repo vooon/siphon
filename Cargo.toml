@@ -22,11 +22,11 @@ tokio = { version = "1.6", features = ["io-util", "macros", "rt-multi-thread", "
 tokio-util = { version = "0.7", features = ["io"] }
 
 # proxmox-backup workspace: not published, pinned to the server release (see docs/DESIGN.md)
-pbs-client = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "bc863d45e" } # 4.2.3-1
-pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "bc863d45e" } # 4.2.3-1
+pbs-client = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "1df6dff9c" } # 4.2.10-1
+pbs-datastore = { git = "https://git.proxmox.com/git/proxmox-backup.git", rev = "1df6dff9c" } # 4.2.10-1
 
 # proxmox workspace, resolved through [patch.crates-io] below
-pbs-api-types = "1.0.16"
+pbs-api-types = "1.0.21"
 proxmox-http = { version = "1", features = ["body", "client"] }
 proxmox-human-byte = "1"
 proxmox-time = "2"
@@ -38,32 +38,34 @@ pxar = "1.0.1"
 # NOTE: [patch] only applies at the workspace root; keep this block in sync
 # when bumping the proxmox-backup revision.
 [patch.crates-io]
-pbs-api-types = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-async = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-auth-api = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-base64 = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-borrow = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-compression = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-config-digest = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-http = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-http-error = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-human-byte = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-io = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-lang = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-log = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-notify = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-rate-limiter = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-router = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-s3-client = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-schema = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-section-config = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-sendmail = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-serde = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-shared-memory = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-sys = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-systemd = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-time = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-uuid = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
-proxmox-worker-task = { git = "https://git.proxmox.com/git/proxmox.git", rev = "cc0db6ae88bc2d701cb1eaca7eb1ce38a551f4b9" }
+pbs-api-types = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-async = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-auth-api = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-base64 = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-borrow = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-compression = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-config-digest = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-http = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-http-error = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-human-byte = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-io = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-lang = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-log = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-match-expression = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-notify = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-product-config = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-rate-limiter = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-router = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-s3-client = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-schema = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-section-config = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-sendmail = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-serde = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-shared-memory = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-sys = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-systemd = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-time = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-uuid = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
+proxmox-worker-task = { git = "https://git.proxmox.com/git/proxmox.git", rev = "8600067cb86b592f213c15a90636186a202812c3" }
 pathpatterns = { git = "https://git.proxmox.com/git/pathpatterns.git", rev = "5323cbe49ae5d592eb8a3fa2e215550e83dd7fba" }
 pxar = { git = "https://git.proxmox.com/git/pxar.git", rev = "091a8a382d0d6fc71025351fb35c51b1f3b0074d" }

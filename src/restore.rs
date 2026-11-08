@@ -46,7 +46,7 @@ pub async fn run(args: RestoreArgs) -> Result<String> {
     );
 
     let reader = BackupReader::start(&http, None, repo.store(), ns, &snapshot, false).await?;
-    let (manifest, _) = reader.download_manifest().await?;
+    let (manifest, _) = reader.download_manifest(false).await?;
     manifest.check_fingerprint(None)?;
     let index = reader.download_dynamic_index(&manifest, &archive).await?;
     let most_used = index.find_most_used_chunks(8);
